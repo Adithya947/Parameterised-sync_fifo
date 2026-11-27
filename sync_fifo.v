@@ -1,74 +1,44 @@
+
 `timescale 1ns/1ps
 
 module sync_fifo #(
-    parameter DATA_WIDTH = 8,
-    parameter DEPTH      = 16
+    parameter DATA_W = 8,
+    parameter ADDR_W = 3                 // DEPTH = 2^ADDR_W = 8
 )(
-    input  wire                  clk,
-    input  wire                  rst,
-
-    input  wire                  wr_en,
-    input  wire                  rd_en,
-    input  wire [DATA_WIDTH-1:0] din,
-
-    output reg  [DATA_WIDTH-1:0] dout,
-    output wire                  full,
-    output wire                  empty
+    input                   clk, rst_n,
+    input                   wr_en, rd_en,
+    input      [DATA_W-1:0] wr_data,
+    output reg [DATA_W-1:0] rd_data,
+    output                  full, empty
 );
+    localparam DEPTH = 1 << ADDR_W;
 
-    // Calculate address width.
-    // For DEPTH=1, keep address width at 1.
-    localparam ADDR_WIDTH = (DEPTH <= 1) ? 1 : $clog2(DEPTH);
+    reg [DATA_W-1:0] mem [0:DEPTH-1];
+    reg [ADDR_W:0]   wr_ptr, rd_ptr;     // extra MSB = lap bit
 
-    // Memory
-    reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+    // flags: pure comparisons of the two pointers
+    assign empty = (wr_ptr == rd_ptr);
+    assign full  = (wr_ptr[ADDR_W-1:0] == rd_ptr[ADDR_W-1:0]) &&
+                   (wr_ptr[ADDR_W]     != rd_ptr[ADDR_W]);
 
-    // Read and write pointers
-    reg [ADDR_WIDTH-1:0] wr_ptr;
-    reg [ADDR_WIDTH-1:0] rd_ptr;
+    // accept an operation only if legal
+    wire do_wr = wr_en && !full;
+    wire do_rd = rd_en && !empty;
 
-    // Number of elements currently stored
-    integer count;
-
-    assign empty = (count == 0);
-    assign full  = (count == DEPTH);
-
-    always @(posedge clk) begin
-        if (rst) begin
+    // pointers
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
             wr_ptr <= 0;
             rd_ptr <= 0;
-            count  <= 0;
-            dout   <= 0;
-        end
-        else begin
-
-            // Write operation
-            if (wr_en && !full) begin
-                mem[wr_ptr] <= din;
-
-                if (wr_ptr == DEPTH-1)
-                    wr_ptr <= 0;
-                else
-                    wr_ptr <= wr_ptr + 1'b1;
-            end
-
-            // Read operation
-            if (rd_en && !empty) begin
-                dout <= mem[rd_ptr];
-
-                if (rd_ptr == DEPTH-1)
-                    rd_ptr <= 0;
-                else
-                    rd_ptr <= rd_ptr + 1'b1;
-            end
-
-            // Count update
-            case ({wr_en && !full, rd_en && !empty})
-                2'b10: count <= count + 1;
-                2'b01: count <= count - 1;
-                default: count <= count;
-            endcase
+        end else begin
+            if (do_wr) wr_ptr <= wr_ptr + 1;
+            if (do_rd) rd_ptr <= rd_ptr + 1;
         end
     end
 
+    // memory: only the lower ADDR_W bits address it
+    always @(posedge clk) begin
+        if (do_wr) mem[wr_ptr[ADDR_W-1:0]] <= wr_data;
+        if (do_rd) rd_data <= mem[rd_ptr[ADDR_W-1:0]];
+    end
 endmodule
